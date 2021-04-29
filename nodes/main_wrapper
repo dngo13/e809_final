@@ -18,8 +18,9 @@ def open_yaml():
     ws_path = sys.path[0]
     recorder_path = ws_path + "/../yaml/location_recorder.yaml"
     with open(recorder_path, 'r') as yaml_file:
-        rec = yaml.safe_load(yaml_file)
-        print(rec)
+        rec = yaml.safe_load_all(yaml_file)
+        for item in rec:
+            print(item)
     return rec
 # Tell leader to go to locations from yaml
 # Use /scan to tell follower to keep 0.5m behind
