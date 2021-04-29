@@ -1,0 +1,41 @@
+#! /usr/bin/env python
+
+import rospy
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from geometry_msgs.msg import PoseStamped
+import tf
+from sensor_msgs.msg import LaserScan
+from tf.transformations import euler_from_quaternion
+import sys
+import yaml
+import move_base
+
+# Node 1, leader to goals ================================
+# Reads the yaml file generated from previous RWA
+def open_yaml():
+    global recorder_path
+    ws_path = sys.path[0]
+    recorder_path = ws_path + "/../yaml/location_recorder.yaml"
+    with open(recorder_path, 'r') as yaml_file:
+        rec = yaml.safe_load(yaml_file)
+        print(rec)
+    return rec
+# Tell leader to go to locations from yaml
+# Use /scan to tell follower to keep 0.5m behind
+# Leader--------
+# create and update parameter on server -> location for leader
+#  ->> string: "livingroom" or list [x, y, z]
+def leader_action(rec):
+    print(type(rec))
+
+#=====================================================================
+# Node 2, transform camera frame to map frame, generates goal in map for follower
+# Use move_base to tell follower to reach goal/follow leader
+#=======================================================
+# 1 - read T_camera from /fiducial transforms
+# 2 - broadcast in the frame follower_tf/camera_rgb_optical_frame
+# 3 - listener.lookupTransform between broadcrast frame and map
+if __name__ == "__main__":
+    rec = open_yaml()
+    leader_action(rec)
