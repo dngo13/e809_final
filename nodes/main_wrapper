@@ -11,6 +11,10 @@ import sys
 import yaml
 import move_base
 
+import threading
+from fiducial_msgs.msg import Fiducial, FiducialTransform, FiducialTransformArray
+
+
 # Node 1, leader to goals ================================
 # Reads the yaml file generated from previous RWA
 def open_yaml():
@@ -37,6 +41,78 @@ def leader_action(rec):
 # 1 - read T_camera from /fiducial transforms
 # 2 - broadcast in the frame follower_tf/camera_rgb_optical_frame
 # 3 - listener.lookupTransform between broadcrast frame and map
+
+# For step #1 and #2
+class FiducialBroadCast:
+    # The class is copied and modified from https://github.com/jrlandau/fiducials-1/blob/master/fiducial_slam/src/fiducial_slam.py#L173
+    def __init__(self):
+        rospy.init_node('fidicual_broadcast')
+        self.br = tf.TransformBroadcaster()
+        # self.publishLock = threading.Lock()
+        rospy.Subscriber('/fiducial_transforms', FiducialTransformArray, self.newTf)
+        # self.posePub = rospy.Publisher("/fiducial_pose", PoseWithCovarianceStamped, queue_size=1)
+
+
+    def newTf(self, msg):
+        """
+            Called when a FiducialTransformArray is received
+        """
+        # self.currentSeq = msg.image_seq
+        # self.imageTime = msg.header.stamp
+        # self.tfs = {}
+        # rospy.loginfo("got tfs from image seq %d", self.currentSeq)
+
+        #rospy.loginfo("From fiducial_transforms, image_seq={is}".format(is=msg.image_seq))
+
+        for t in msg.transforms:
+            child_frame = "leader_marker" # Get from spawn_marker_on_robot - line 43
+            parent_frame = "/follower_tf/camera_rgb_optical_frame"
+            # !!! Not sure whether child_frame/parent_frame above is correct here
+            # In http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28Python%29's example it is turtlename vs world
+
+            # self.publishLock.acquire()
+            self.br.sendTransform(t.transform.translation,
+                                  t.transform.rotation,
+                                  rospy.Time.now(),  # !!! I'm not sure whether it should be replaced with msg.header.stamp
+                                  child_frame,
+                                  parent_frame)
+            # self.publishLock.release()
+            
+            
+ # For step 3 listener.lookupTransform           
+ def get_marker_data():
+    """Get the current pose of the marker in the map frame from the follower_tf/odom topic and camera_rgb_optical_frame
+
+    Return
+    ----------
+    The position (x, y, z) and the yaw of the marker
+
+    """
+
+    # parent frame for the listener
+    # parent_frame = 'odom'
+    # child frame for the listener
+    # child_frame = 'base_footprint'
+
+    parent_frame = 'follower_tf/odom'
+    child_frame = 'follwer_tf/camera_rgb_optical_frame'
+
+    # set up a tf listener to retrieve transform between the robot and the world
+    tf_listener = tf.TransformListener()
+
+    # Below is code copied from my_bot_controller: get_odom_data
+    try:
+        # listener to get child_frame vs parent_frame
+        (trans, rot) = tf_listener.lookupTransform(parent_frame, child_frame, rospy.Time(0))
+        # rotation is a list [r, p, y]
+        rotation = euler_from_quaternion(rot)
+    except (tf.Exception, tf.ConnectivityException, tf.LookupException):
+        rospy.loginfo("TF Exception")
+        return
+
+    # return the position (x, y, z) and the yaw
+    return Point(*trans), rotation[2]           
+
 if __name__ == "__main__":
     rec = open_yaml()
     leader_action(rec)
