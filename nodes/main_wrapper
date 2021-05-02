@@ -3,7 +3,7 @@
 import rospy
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, wist, Point, Vector3
 import tf
 from sensor_msgs.msg import LaserScan
 from tf.transformations import euler_from_quaternion
@@ -43,45 +43,87 @@ def leader_action(rec):
 # 3 - listener.lookupTransform between broadcrast frame and map
 
 # For step #1 and #2
-class FiducialBroadCast:
-    # The class is copied and modified from https://github.com/jrlandau/fiducials-1/blob/master/fiducial_slam/src/fiducial_slam.py#L173
+class FiducialBroadcast:
     def __init__(self):
-        rospy.init_node('fidicual_broadcast')
+        print("Initializing new FiducialBroadcast object ")
+        rospy.init_node('fiducial_broadcast')
+        # self.currentSeq = None
+        # self.imageTime = None
+        # self.tfs = {}
         self.br = tf.TransformBroadcaster()
         # self.publishLock = threading.Lock()
+        # self.markerPub = rospy.Publisher('fiducials', Marker, queue_size=20)
         rospy.Subscriber('/fiducial_transforms', FiducialTransformArray, self.newTf)
         # self.posePub = rospy.Publisher("/fiducial_pose", PoseWithCovarianceStamped, queue_size=1)
+        self.child_frame = "marker_frame"  # Name suggested by professor, could be any name
+        self.parent_frame = "follower_tf/camera_rgb_optical_frame"
+        self.translation = None
+        self.rotation = None
+
+    def publishTransform(self):
+
+        """publish the transform when self.translation and self.rotation is not None
+        """
+
+        if self.translation and self.rotation:
+            # The publishLock is optional here. I choose to comment it for now
+            # self.publishLock.acquire()
+            self.br.sendTransform(self.translation,
+                                  self.rotation,
+                                  rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
+                                  # Tutorial2 shows rospy.Time.now() vs tutorial3 shows the latter
+                                  self.child_frame,
+                                  self.parent_frame)
+            # self.publishLock.release()
 
 
     def newTf(self, msg):
         """
-            Called when a FiducialTransformArray is received
+            Broadcast fiducial_transforms when a FiducialTransformArray is received
+
+            The tutorial followed when writing this function:
+            1. Write broadcaster in Python
+                http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28Python%29
+            2. Write broadcaster in C++(suggested by prof)
+                http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28C%2B%2B%2
+            3. fiducial's github:
+                https://github.com/jrlandau/fiducials-1/blob/master/fiducial_slam/src/fiducial_slam.py#L173
         """
         # self.currentSeq = msg.image_seq
         # self.imageTime = msg.header.stamp
         # self.tfs = {}
         # rospy.loginfo("got tfs from image seq %d", self.currentSeq)
 
-        #rospy.loginfo("From fiducial_transforms, image_seq={is}".format(is=msg.image_seq))
-
         for t in msg.transforms:
-            child_frame = "leader_marker" # Get from spawn_marker_on_robot - line 43
-            parent_frame = "/follower_tf/camera_rgb_optical_frame"
-            # !!! Not sure whether child_frame/parent_frame above is correct here
-            # In http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28Python%29's example it is turtlename vs world
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            tr.z = 0    # hardcode the marker's z to be 0, otherwise the follower could never reach it
+            self.translation = (tr.x, tr.y, tr.z)
+            self.rotation = (rot.x, rot.y, rot.z, rot.w)
+            self.publishTransform()
 
-            # self.publishLock.acquire()
-            self.br.sendTransform(t.transform.translation,
-                                  t.transform.rotation,
-                                  rospy.Time.now(),  # !!! I'm not sure whether it should be replaced with msg.header.stamp
-                                  child_frame,
-                                  parent_frame)
-            # self.publishLock.release()
-            
-            
- # For step 3 listener.lookupTransform           
- def get_marker_data():
-    """Get the current pose of the marker in the map frame from the follower_tf/odom topic and camera_rgb_optical_frame
+    def run(self):
+        hz = 10.0
+        rospy.loginfo("Fiducial Broadcaster started")
+        rate = rospy.Rate(hz)
+        while not rospy.is_shutdown():
+            self.publishTransform()
+            rate.sleep()
+            print("Marker data:", get_marker_data()) # !!! This line should be deleted in the future. 
+            """
+            Currently the output looks like 
+            ('Marker data:', (x: 2.33696892147
+                    y: 0.842935031475
+                    z: 0.302890537336, -1.5217140603660546))
+            I don't know whether it's correct or not. 
+            """
+        self.close()
+        rospy.loginfo("Fiducial Broadcaster ended")
+
+        
+# For step 3 listener.lookupTransform           
+def get_marker_data():
+    """Get the current pose of the marker in the map frame between 'map' and 'marker_frame'
 
     Return
     ----------
@@ -90,15 +132,13 @@ class FiducialBroadCast:
     """
 
     # parent frame for the listener
-    # parent_frame = 'odom'
+    parent_frame = "/follower_tf/odom" # it should be /map But in my frames.pdf it currently doesn't have map
     # child frame for the listener
-    # child_frame = 'base_footprint'
-
-    parent_frame = 'follower_tf/odom'
-    child_frame = 'follwer_tf/camera_rgb_optical_frame'
+    child_frame = '/marker_frame'
 
     # set up a tf listener to retrieve transform between the robot and the world
     tf_listener = tf.TransformListener()
+    tf_listener.waitForTransform(parent_frame, child_frame, rospy.Time(), rospy.Duration(1.0))
 
     # Below is code copied from my_bot_controller: get_odom_data
     try:
@@ -111,8 +151,10 @@ class FiducialBroadCast:
         return
 
     # return the position (x, y, z) and the yaw
-    return Point(*trans), rotation[2]           
+    return Point(*trans), rotation[2]
 
 if __name__ == "__main__":
     rec = open_yaml()
-    leader_action(rec)
+    node = FiducialBroadcast()
+    node.run()
+    # leader_action(rec)
