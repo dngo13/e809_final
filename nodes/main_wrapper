@@ -3,7 +3,7 @@
 import rospy
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-from geometry_msgs.msg import PoseStamped, wist, Point, Vector3
+from geometry_msgs.msg import PoseStamped, Twist, Point, Vector3
 import tf
 from sensor_msgs.msg import LaserScan
 from tf.transformations import euler_from_quaternion
