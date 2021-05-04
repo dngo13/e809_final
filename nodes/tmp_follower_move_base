@@ -1,0 +1,236 @@
+#!/usr/bin/env python
+
+
+import rospy
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+
+from geometry_msgs.msg import PoseStamped, Twist, Point, Vector3
+import tf
+from tf.transformations import euler_from_quaternion
+import sys
+import yaml
+import math
+from actionlib_msgs.msg import *
+
+from fiducial_msgs.msg import Fiducial, FiducialTransform, FiducialTransformArray
+
+
+def get_goals_from_yaml():
+    """Get goals from data stored in location_recorder.yaml"""
+
+    # Get the current directory (e.g. /home/xxx/catkin_ws/src/location_recorder/nodes)
+    ws_path = sys.path[0]
+
+    # Get the path to save location_recorder.yaml
+    recorder_path = ws_path + "/../yaml/location_recorder.yaml"
+    with open(recorder_path, 'r') as yaml_file:
+        rec = yaml.safe_load_all(yaml_file)
+        # Transforming rec to list could solve the error:
+        #      TypeError: 'generator' object has no attribute '__getitem__'
+        goals = [goal for goal in rec]
+        print("Returning record for updating self.goals", goals)
+    return goals
+
+
+class FiducialBroadcast:
+
+    def __init__(self):
+        print("Initializing new FiducialBroadcast object ")
+        rospy.init_node('fiducial_broadcast')
+        self.br = tf.TransformBroadcaster()
+        # self.publishLock = threading.Lock()
+        # self.markerPub = rospy.Publisher('fiducials', Marker, queue_size=20)
+        rospy.Subscriber('/fiducial_transforms', FiducialTransformArray, self.newTf)
+        self.rate = rospy.Rate(4)
+        # self.posePub = rospy.Publisher("/fiducial_pose", PoseWithCovarianceStamped, queue_size=1)
+        self.child_frame = "marker_frame"  # Name suggested by professor, could be any name
+        self.parent_frame = "follower_tf/camera_rgb_optical_frame"
+        self.translation = None
+        self.rotation = None
+
+        # Assume the follower is not in exploration_mode
+        self.exploration_mode = False
+
+        # set up a tf listener to retrieve transform between the robot and the world
+        self.tf_listener = tf.TransformListener()
+
+        # initialize the position&orientation of goals with data retrieved from yaml
+        self.goals = get_goals_from_yaml()
+        # initialize the status of whether the current goal is reached to be False(unreached)
+        self.goalReached = False
+        # initialize the 1st goal to reach be 0
+        # currentGoalId: 0-livingroom 1-recreationroom 2-kitchen 3-bedroom
+        self.currentGoalId = 0
+
+        self.goal = MoveBaseGoal()
+        # set up the frame parameters
+        self.goal.target_pose.header.frame_id = "map"
+
+    def publishTransform(self):
+
+        """publish the transform when self.translation and self.rotation is not None
+        """
+
+        if self.translation and self.rotation:
+            # The publishLock is optional here. I choose to comment it for now
+            # self.publishLock.acquire()
+            # print(self.translation, self.rotation)
+            self.br.sendTransform(self.translation,
+                                  self.rotation,
+                                  rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
+                                  # Tutorial2 shows rospy.Time.now() vs tutorial3 shows the latter
+                                  self.child_frame,
+                                  self.parent_frame)
+            # self.publishLock.release()
+
+    def within_range(self, x, y):
+        return math.sqrt(x*x+y*y) < 0.5
+
+    def newTf(self, msg):
+        """
+            Broadcast fiducial_transforms when a FiducialTransformArray is received
+
+            The tutorial followed when writing this function:
+            1. Write broadcaster in Python
+                http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28Python%29
+            2. Write broadcaster in C++(suggested by prof)
+                http://wiki.ros.org/tf/Tutorials/Writing%20a%20tf%20broadcaster%20%28C%2B%2B%2
+            3. fiducial's github:
+                https://github.com/jrlandau/fiducials-1/blob/master/fiducial_slam/src/fiducial_slam.py#L173
+        """
+
+        print("In newTf")
+        if msg.transforms:  # When the marker is found
+            if self.exploration_mode:  # When in exploration mode
+                rospy.loginfo("Marker found")
+            for t in msg.transforms:  # len(msg.transforms) always equals 1 in our case
+                tr = t.transform.translation
+                rot = t.transform.rotation
+                tr.z = 0  # hardcode the marker's z to be 0, otherwise the follower could never reach it
+                self.translation = (tr.x, tr.y, tr.z)
+                self.rotation = (rot.x, rot.y, rot.z, rot.w)
+                if not self.within_range(tr.x, tr.y):
+                    # When the marker is out of range(0.5m) of the follower
+                    self.publishTransform()
+                    self.rate.sleep()
+                    self.update_goal_with_marker()
+                    self.move_to_goal()
+                    if self.exploration_mode:
+                        rospy.loginfo("Following")
+                else:
+                    # When the marker is within 0.5m of the follower, do nothing
+                    print(self. translation, "DO nothing")
+                    pass
+            self.exploration_mode = False
+        else:
+            rospy.loginfo("Looking for marker")
+            self.exploration_mode = True
+
+            self.currentGoalId = rospy.get_param("currentGoalId")
+            self.update_goal_with_yaml_data()
+            self.move_to_goal()
+
+    def update_goal_with_marker(self):
+        trans, rot = self.get_marker_data()
+
+        self.goal.target_pose.header.stamp = rospy.Time.now()
+        self.goal.target_pose.pose.position = trans
+        self.goal.target_pose.pose.orientation = rot
+
+    def update_goal_with_yaml_data(self):
+        self.goal.target_pose.header.stamp = rospy.Time.now()
+
+        # moving towards the goal*/
+        pos = self.goals[self.currentGoalId].values()[0]["position"]
+        ori = self.goals[self.currentGoalId].values()[0]["orientation"]
+
+        self.goal.target_pose.pose.position.x = pos['x'] - 0.2
+        self.goal.target_pose.pose.position.y = pos['y'] - 0.2
+        self.goal.target_pose.pose.position.z = pos['z']
+        self.goal.target_pose.pose.orientation.x = ori['x']
+        self.goal.target_pose.pose.orientation.y = ori['y']
+        self.goal.target_pose.pose.orientation.z = ori['z']
+        self.goal.target_pose.pose.orientation.w = ori['w']
+
+    def move_to_goal(self):
+        """
+        move to self.goals[self.currentGoalId],
+        """
+        # define a client for to send goal requests to the move_base server through a SimpleActionClient
+        client = actionlib.SimpleActionClient("/follower/move_base", MoveBaseAction)
+
+        # wait for the action server to come up, wait for 10 sec or stop
+        result = client.wait_for_server()
+        rospy.loginfo("Result for wait_for_server is {r}".format(r=result))
+        # while (not client.wait_for_server(rospy.Duration.from_sec(5.0))):
+        #     rospy.loginfo("Waiting for the move_base action server to come up")
+
+        rospy.loginfo("Sending goal location ...")
+        print("goal: ", self.goal.target_pose.pose.position, self.goal.target_pose.pose.orientation)
+        client.send_goal(self.goal)
+
+        # client.wait_for_result(rospy.Duration(60))
+        client.wait_for_result()
+        if client.get_state() == GoalStatus.SUCCEEDED:
+            rospy.loginfo("You have reached the destination")
+            return True
+        else:
+            rospy.loginfo("The robot failed to reach the destination")
+            return False
+
+    def run(self):
+        rospy.loginfo("Fiducial Broadcaster started")
+
+        while not rospy.is_shutdown():
+            self.publishTransform()
+            self.rate.sleep()
+            # print("Marker data:", self.get_marker_data())
+            """
+            Currently the output looks like 
+                ('Marker data:', (x: 2.31065995698
+                y: 0.84304929187
+                z: 0.305896861637, -1.5560671787703644))
+
+            I don't know whether it's correct or not. 
+            """
+        self.close()
+        rospy.loginfo("Fiducial Broadcaster ended")
+
+    # For step 3 listener.lookupTransform
+    def get_marker_data(self):
+        """Get the current pose of the marker in the map frame between 'map' and 'marker_frame'
+
+        Return
+        ----------
+        The position (x, y, z) and the yaw of the marker
+
+        """
+
+        # parent frame for the listener
+        parent_frame = "/map"  # it should be /map But in my frames.pdf it currently doesn't have map
+        # child frame for the listener
+        child_frame = '/marker_frame'
+
+        self.tf_listener.waitForTransform(parent_frame, child_frame, rospy.Time(), rospy.Duration(1.0))
+        # Below is code copied from my_bot_controller: get_odom_data
+        try:
+            # listener to get child_frame vs parent_frame
+            (trans, rot) = self.tf_listener.lookupTransform(parent_frame, child_frame, rospy.Time(0))
+            print("In get marker data, trans, rot", trans, rot)
+            # rotation is a list [r, p, y]
+            rotation = euler_from_quaternion(rot)
+        except (tf.Exception, tf.ConnectivityException, tf.LookupException):
+            rospy.loginfo("TF Exception")
+            return
+
+        # return the position (x, y, z) and the yaw
+        return Point(*trans), rotation[2]
+
+
+if __name__ == '__main__':
+    node = FiducialBroadcast()
+    # node = FollowerMoveBase()
+    node.run()
+    # rospy.init_node('movebase_client_py')
+    # publish_on_move_base()
