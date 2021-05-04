@@ -26,6 +26,8 @@ def open_yaml():
         for item in rec:
             print(item)
     return rec
+
+
 # Tell leader to go to locations from yaml
 # Use /scan to tell follower to keep 0.5m behind
 # Leader--------
@@ -34,10 +36,11 @@ def open_yaml():
 def leader_action(rec):
     print(type(rec))
 
-#=====================================================================
+
+# =====================================================================
 # Node 2, transform camera frame to map frame, generates goal in map for follower
 # Use move_base to tell follower to reach goal/follow leader
-#=======================================================
+# =======================================================
 # 1 - read T_camera from /fiducial transforms
 # 2 - broadcast in the frame follower_tf/camera_rgb_optical_frame
 # 3 - listener.lookupTransform between broadcrast frame and map
@@ -60,6 +63,10 @@ class FiducialBroadcast:
         self.translation = None
         self.rotation = None
 
+        # set up a tf listener to retrieve transform between the robot and the world
+        self.tf_listener = tf.TransformListener()
+
+
     def publishTransform(self):
 
         """publish the transform when self.translation and self.rotation is not None
@@ -68,6 +75,7 @@ class FiducialBroadcast:
         if self.translation and self.rotation:
             # The publishLock is optional here. I choose to comment it for now
             # self.publishLock.acquire()
+            # print(self.translation, self.rotation)
             self.br.sendTransform(self.translation,
                                   self.rotation,
                                   rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
@@ -106,20 +114,22 @@ class FiducialBroadcast:
         hz = 10.0
         rospy.loginfo("Fiducial Broadcaster started")
         rate = rospy.Rate(hz)
+
         while not rospy.is_shutdown():
             self.publishTransform()
             rate.sleep()
-            print("Marker data:", get_marker_data()) # !!! This line should be deleted in the future. 
+            print("Marker data:", self.get_marker_data())
             """
             Currently the output looks like 
-            ('Marker data:', (x: 2.33696892147
-                    y: 0.842935031475
-                    z: 0.302890537336, -1.5217140603660546))
+                ('Marker data:', (x: 2.31065995698
+                y: 0.84304929187
+                z: 0.305896861637, -1.5560671787703644))
+
             I don't know whether it's correct or not. 
             """
         self.close()
         rospy.loginfo("Fiducial Broadcaster ended")
-     
+
     # For step 3 listener.lookupTransform
     def get_marker_data(self):
         """Get the current pose of the marker in the map frame between 'map' and 'marker_frame'
@@ -148,7 +158,6 @@ class FiducialBroadcast:
 
         # return the position (x, y, z) and the yaw
         return Point(*trans), rotation[2]
-        
 
 
 if __name__ == "__main__":
