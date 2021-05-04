@@ -32,7 +32,7 @@ def get_goals_from_yaml():
     with open(recorder_path, 'r') as yaml_file:
         rec = yaml.safe_load_all(yaml_file)
         # Transforming rec to list could solve the error:
-        # TypeError: 'generator' object has no attribute '__getitem__'
+        #      TypeError: 'generator' object has no attribute '__getitem__'
         goals = [goal for goal in rec]
         print("Returning record for updating self.goals", goals)
     return goals
@@ -43,7 +43,7 @@ class LeaderMoveBase:
     def __init__(self):
 
         rospy.loginfo("Initialize LeaderMoveBase")
-        rospy.init_node('leader_move_base', anonymous=False)
+        rospy.init_node('leader_move_base_client', anonymous=False)
         # initialize the position&orientation of goals with data retrieved from yaml
         self.goals = get_goals_from_yaml()
         # initialize the status of whether the current goal is reached to be False(unreached)
@@ -53,9 +53,8 @@ class LeaderMoveBase:
         self.currentGoalId = 0
 
     def shutdown(self):
-        # stop turtlebot
         rospy.loginfo("Quit program")
-        rospy.sleep()
+        # rospy.sleep()
 
     def moveToGoal(self):
         """
@@ -64,8 +63,8 @@ class LeaderMoveBase:
         # define a client for to send goal requests to the move_base server through a SimpleActionClient
         client = actionlib.SimpleActionClient("/leader/move_base", MoveBaseAction)
 
-        # wait for the action server to come up
-        result = client.wait_for_server(rospy.Duration.from_sec(5.0))
+        # wait for the action server to come up, wait for 10 sec or stop
+        result = client.wait_for_server(rospy.Duration.from_sec(10.0))
         rospy.loginfo("Result for wait_for_server is {r}".format(r=result))
         # while (not client.wait_for_server(rospy.Duration.from_sec(5.0))):
         #     rospy.loginfo("Waiting for the move_base action server to come up")
@@ -91,10 +90,15 @@ class LeaderMoveBase:
             y: -1.2041528819093226
             z: 0.0
         """
-        print(self.goals[self.currentGoalId])
-        print(self.goals[self.currentGoalId].values())
-        goal.target_pose.pose.position = self.goals[self.currentGoalId].values()[0]["position"]
-        goal.target_pose.pose.orientation = self.goals[self.currentGoalId].values()[0]["position"]
+        pos = self.goals[self.currentGoalId].values()[0]["position"]
+        ori = self.goals[self.currentGoalId].values()[0]["orientation"]
+        goal.target_pose.pose.position.x = pos['x']
+        goal.target_pose.pose.position.y = pos['y']
+        goal.target_pose.pose.position.z = pos['z']
+        goal.target_pose.pose.orientation.x = ori['x']
+        goal.target_pose.pose.orientation.y = ori['y']
+        goal.target_pose.pose.orientation.z = ori['z']
+        goal.target_pose.pose.orientation.w = ori['w']
 
         rospy.loginfo("Sending goal location ...")
         print("goal: ", goal.target_pose.pose.position, goal.target_pose.pose.orientation)
@@ -121,7 +125,8 @@ class LeaderMoveBase:
                 2 - kitchen
                 3 - bedroom"""
                 self.currentGoalId = i
-                rospy.loginfo("Leader is heading to goalId={id}".format(id=self.currentGoalId))
+                rospy.loginfo("Leader is heading to goalId={id} room={r}".format(id=self.currentGoalId,
+                                        r =self.goals[self.currentGoalId].keys()[0]))
                 self.goalReached = self.moveToGoal()
 
         self.shutdown()
