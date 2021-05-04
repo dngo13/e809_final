@@ -119,39 +119,37 @@ class FiducialBroadcast:
             """
         self.close()
         rospy.loginfo("Fiducial Broadcaster ended")
+     
+    # For step 3 listener.lookupTransform
+    def get_marker_data(self):
+        """Get the current pose of the marker in the map frame between 'map' and 'marker_frame'
 
+        Return
+        ----------
+        The position (x, y, z) and the yaw of the marker
+
+        """
+
+        # parent frame for the listener
+        parent_frame = "/map"  # it should be /map But in my frames.pdf it currently doesn't have map
+        # child frame for the listener
+        child_frame = '/marker_frame'
+
+        self.tf_listener.waitForTransform(parent_frame, child_frame, rospy.Time(), rospy.Duration(1.0))
+        # Below is code copied from my_bot_controller: get_odom_data
+        try:
+            # listener to get child_frame vs parent_frame
+            (trans, rot) = self.tf_listener.lookupTransform(parent_frame, child_frame, rospy.Time(0))
+            # rotation is a list [r, p, y]
+            rotation = euler_from_quaternion(rot)
+        except (tf.Exception, tf.ConnectivityException, tf.LookupException):
+            rospy.loginfo("TF Exception")
+            return
+
+        # return the position (x, y, z) and the yaw
+        return Point(*trans), rotation[2]
         
-# For step 3 listener.lookupTransform           
-def get_marker_data():
-    """Get the current pose of the marker in the map frame between 'map' and 'marker_frame'
 
-    Return
-    ----------
-    The position (x, y, z) and the yaw of the marker
-
-    """
-
-    # parent frame for the listener
-    parent_frame = "/follower_tf/odom" # it should be /map But in my frames.pdf it currently doesn't have map
-    # child frame for the listener
-    child_frame = '/marker_frame'
-
-    # set up a tf listener to retrieve transform between the robot and the world
-    tf_listener = tf.TransformListener()
-    tf_listener.waitForTransform(parent_frame, child_frame, rospy.Time(), rospy.Duration(1.0))
-
-    # Below is code copied from my_bot_controller: get_odom_data
-    try:
-        # listener to get child_frame vs parent_frame
-        (trans, rot) = tf_listener.lookupTransform(parent_frame, child_frame, rospy.Time(0))
-        # rotation is a list [r, p, y]
-        rotation = euler_from_quaternion(rot)
-    except (tf.Exception, tf.ConnectivityException, tf.LookupException):
-        rospy.loginfo("TF Exception")
-        return
-
-    # return the position (x, y, z) and the yaw
-    return Point(*trans), rotation[2]
 
 if __name__ == "__main__":
     rec = open_yaml()
