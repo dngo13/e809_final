@@ -11,6 +11,7 @@ import sys, yaml, threading
 from math import radians, degrees
 from actionlib_msgs.msg import *
 
+
 from fiducial_msgs.msg import Fiducial, FiducialTransform, FiducialTransformArray
 
 
@@ -106,28 +107,38 @@ class LeaderMoveBase:
 
         client.wait_for_result(rospy.Duration(60))
 
-        if (client.get_state() == GoalStatus.SUCCEEDED):
+        if client.get_state() == GoalStatus.SUCCEEDED:
             rospy.loginfo("You have reached the destination")
             return True
         else:
             rospy.loginfo("The robot failed to reach the destination")
             return False
 
+    def updateCurrentGoalId(self, goalId):
+        self.currentGoalId = goalId
+        rospy.set_param("currentGoalId", self.currentGoalId)
+
     def run(self):
         hz = 10.0
         rospy.loginfo("LeaderMoveBase started")
         rate = rospy.Rate(hz)
 
-        while not rospy.is_shutdown():
-            for i in range(4):
-                """ currentGoalId: 0 - livingroom
-                1 - recreationroom
-                2 - kitchen
-                3 - bedroom"""
-                self.currentGoalId = i
-                rospy.loginfo("Leader is heading to goalId={id} room={r}".format(id=self.currentGoalId,
-                                        r =self.goals[self.currentGoalId].keys()[0]))
-                self.goalReached = self.moveToGoal()
+        for goalId in range(4):
+            """ currentGoalId: 0 - livingroom
+            1 - recreationroom
+            2 - kitchen
+            3 - bedroom"""
+            self.updateCurrentGoalId(goalId)
+            room_name = self.goals[self.currentGoalId].keys()[0]
+            rospy.loginfo("Leader is heading to goalId={id} room={r}".format(id=self.currentGoalId, r=room_name))
+            self.goalReached = self.moveToGoal()
+            if self.goalReached:
+                rospy.loginfo("{r} reached".format(r=room_name))
+                # Sleep for 10 seconds to wait for follower
+                rospy.sleep(10)
+            else:
+                rospy.logwarn("OOPS! {r} cannot be reached".format(r=room_name))
+                break
 
         self.shutdown()
         rospy.loginfo("leaderMoveBase ended")
@@ -137,7 +148,6 @@ if __name__ == '__main__':
     try:
         node = LeaderMoveBase()
         node.run()
-        rospy.loginfo("You have reached the destination")
 
     except rospy.ROSInterruptException:
-        rospy.loginfo("map_navigation node terminated.")
+        rospy.loginfo("leader_move_base_client node terminated.")
