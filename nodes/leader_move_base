@@ -42,8 +42,8 @@ def get_goals_from_yaml():
 class LeaderMoveBase:
 
     def __init__(self):
-
-        rospy.loginfo("Initialize LeaderMoveBase")
+        """Initialize class variables and functions"""
+        # rospy.loginfo("Initialize LeaderMoveBase")
         rospy.init_node('leader_move_base_client', anonymous=False)
         # initialize the position&orientation of goals with data retrieved from yaml
         self.goals = get_goals_from_yaml()
@@ -54,7 +54,8 @@ class LeaderMoveBase:
         self.currentGoalId = 0
 
     def shutdown(self):
-        rospy.loginfo("Quit program")
+        """Shut down program"""
+        rospy.loginfo("Exiting program")
         # rospy.sleep()
 
     def moveToGoal(self):
@@ -66,7 +67,7 @@ class LeaderMoveBase:
 
         # wait for the action server to come up, wait for 10 sec or stop
         result = client.wait_for_server(rospy.Duration.from_sec(10.0))
-        rospy.loginfo("Result for wait_for_server is {r}".format(r=result))
+        # rospy.loginfo("Result for wait_for_server is {r}".format(r=result))
         # while (not client.wait_for_server(rospy.Duration.from_sec(5.0))):
         #     rospy.loginfo("Waiting for the move_base action server to come up")
 
@@ -100,11 +101,7 @@ class LeaderMoveBase:
         goal.target_pose.pose.orientation.y = ori['y']
         goal.target_pose.pose.orientation.z = ori['z']
         goal.target_pose.pose.orientation.w = ori['w']
-
-        rospy.loginfo("Sending goal location ...")
-        print("goal: ", goal.target_pose.pose.position, goal.target_pose.pose.orientation)
         client.send_goal(goal)
-
         client.wait_for_result(rospy.Duration(60))
 
         if client.get_state() == GoalStatus.SUCCEEDED:
@@ -115,14 +112,15 @@ class LeaderMoveBase:
             return False
 
     def updateCurrentGoalId(self, goalId):
+        # Updates goal location
         self.currentGoalId = goalId
         rospy.set_param("currentGoalId", self.currentGoalId)
 
     def run(self):
         hz = 10.0
-        rospy.loginfo("LeaderMoveBase started")
+        # rospy.loginfo("LeaderMoveBase started")
         rate = rospy.Rate(hz)
-
+        # Gets goal location from yaml for move to goal
         for goalId in range(4):
             """ currentGoalId: 0 - livingroom
             1 - recreationroom
@@ -130,18 +128,18 @@ class LeaderMoveBase:
             3 - bedroom"""
             self.updateCurrentGoalId(goalId)
             room_name = self.goals[self.currentGoalId].keys()[0]
-            rospy.loginfo("Leader is heading to goalId={id} room={r}".format(id=self.currentGoalId, r=room_name))
+            rospy.loginfo("Going to {r}".format(r=room_name))
             self.goalReached = self.moveToGoal()
             if self.goalReached:
                 rospy.loginfo("{r} reached".format(r=room_name))
                 # Sleep for 10 seconds to wait for follower
                 rospy.sleep(10)
             else:
-                rospy.logwarn("OOPS! {r} cannot be reached".format(r=room_name))
+                # rospy.logwarn("OOPS! {r} cannot be reached".format(r=room_name))
                 break
 
         self.shutdown()
-        rospy.loginfo("leaderMoveBase ended")
+        # rospy.loginfo("leaderMoveBase ended")
 
 
 if __name__ == '__main__':
