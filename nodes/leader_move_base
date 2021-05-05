@@ -1,0 +1,150 @@
+#!/usr/bin/env python
+
+
+import rospy
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from geometry_msgs.msg import PoseStamped, Twist, Point, Vector3
+import tf
+from tf.transformations import euler_from_quaternion
+import sys, yaml, threading
+from math import radians, degrees
+from actionlib_msgs.msg import *
+
+from fiducial_msgs.msg import Fiducial, FiducialTransform, FiducialTransformArray
+
+
+"""
+The following code is referenced and modified from 
+https://github.com/aniskoubaa/gaitech_edu/blob/master/src/RIA-E100/navigation/map_navigation.py
+"""
+
+
+def get_goals_from_yaml():
+    """Get goals from data stored in location_recorder.yaml"""
+
+    # Get the current directory (e.g. /home/xxx/catkin_ws/src/location_recorder/nodes)
+    ws_path = sys.path[0]
+
+    # Get the path to save location_recorder.yaml
+    recorder_path = ws_path + "/../yaml/location_recorder.yaml"
+    with open(recorder_path, 'r') as yaml_file:
+        rec = yaml.safe_load_all(yaml_file)
+        # Transforming rec to list could solve the error:
+        #      TypeError: 'generator' object has no attribute '__getitem__'
+        goals = [goal for goal in rec]
+        print("Returning record for updating self.goals", goals)
+    return goals
+
+
+class LeaderMoveBase:
+    def __init__(self):
+        # rospy.loginfo("Initialize LeaderMoveBase")
+        rospy.init_node('leader_move_base_client', anonymous=False)
+        # initialize the position&orientation of goals with data retrieved from yaml
+        self.goals = get_goals_from_yaml()
+        # initialize the status of whether the current goal is reached to be False(unreached)
+        self.goalReached = False
+        # initialize the 1st goal to reach be 0
+        # currentGoalId: 0-livingroom 1-recreationroom 2-kitchen 3-bedroom
+        self.currentGoalId = 0
+
+    def shutdown(self):
+        rospy.loginfo("Exiting program")
+        # rospy.sleep()
+
+    def moveToGoal(self):
+        """
+        move to self.goals[self.currentGoalId],
+        """
+        # define a client for to send goal requests to the move_base server through a SimpleActionClient
+        client = actionlib.SimpleActionClient("/leader/move_base", MoveBaseAction)
+
+        # wait for the action server to come up, wait for 10 sec or stop
+        result = client.wait_for_server(rospy.Duration.from_sec(10.0))
+        # rospy.loginfo("Result for wait_for_server is {r}".format(r=result))
+        # while (not client.wait_for_server(rospy.Duration.from_sec(5.0))):
+        #     rospy.loginfo("Waiting for the move_base action server to come up")
+
+        goal = MoveBaseGoal()
+
+        # set up the frame parameters
+        goal.target_pose.header.frame_id = "map"
+        goal.target_pose.header.stamp = rospy.Time.now()
+
+        # moving towards the goal*/
+
+        """
+        self.goals[self.currentGoalId] looks like
+        livingroom:
+          orientation:
+            w: 0.9998948320216533
+            x: 0.0
+            y: 0.0
+            z: -0.014502582404172605
+          position:
+            x: 3.774855945258958
+            y: -1.2041528819093226
+            z: 0.0
+        """
+        pos = self.goals[self.currentGoalId].values()[0]["position"]
+        ori = self.goals[self.currentGoalId].values()[0]["orientation"]
+        goal.target_pose.pose.position.x = pos['x']
+        goal.target_pose.pose.position.y = pos['y']
+        goal.target_pose.pose.position.z = pos['z']
+        goal.target_pose.pose.orientation.x = ori['x']
+        goal.target_pose.pose.orientation.y = ori['y']
+        goal.target_pose.pose.orientation.z = ori['z']
+        goal.target_pose.pose.orientation.w = ori['w']
+
+        # rospy.loginfo("Sending goal location ...")
+        # print("goal: ", goal.target_pose.pose.position, goal.target_pose.pose.orientation)
+        client.send_goal(goal)
+
+        client.wait_for_result(rospy.Duration(60))
+
+        if client.get_state() == GoalStatus.SUCCEEDED:
+            rospy.loginfo("You have reached the destination")
+            return True
+        else:
+            rospy.loginfo("The robot failed to reach the destination")
+            return False
+
+    def updateCurrentGoalId(self, goalId):
+        self.currentGoalId = goalId
+        rospy.set_param("currentGoalId", self.currentGoalId)
+
+    def run(self):
+        hz = 10.0
+        # rospy.loginfo("LeaderMoveBase started")
+        rate = rospy.Rate(hz)
+
+        for goalId in range(4):
+            """ currentGoalId: 0 - livingroom
+            1 - recreationroom
+            2 - kitchen
+            3 - bedroom"""
+            self.updateCurrentGoalId(goalId)
+            room_name = self.goals[self.currentGoalId].keys()[0]
+            # rospy.loginfo("Going to goalId={id} room={r}".format(id=self.currentGoalId, r=room_name))
+            rospy.loginfo("Going to {r}".format(r=room_name))
+            self.goalReached = self.moveToGoal()
+            if self.goalReached:
+                rospy.loginfo("{r} reached".format(r=room_name))
+                # Sleep for 10 seconds to wait for follower
+                rospy.sleep(10)
+            else:
+                # rospy.logwarn("OOPS! {r} cannot be reached".format(r=room_name))
+                break
+
+        self.shutdown()
+        rospy.loginfo("leaderMoveBase ended")
+
+
+if __name__ == '__main__':
+    try:
+        node = LeaderMoveBase()
+        node.run()
+
+    except rospy.ROSInterruptException:
+        rospy.loginfo("leader_move_base_client node terminated.")
