@@ -18,6 +18,9 @@ from fiducial_msgs.msg import Fiducial, FiducialTransform, FiducialTransformArra
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 
+k_h_gain = 1
+k_v_gain = 0.8
+
 def get_goals_from_yaml():
     """Get goals from data stored in location_recorder.yaml"""
 
@@ -86,7 +89,7 @@ class FiducialBroadcast:
         rospy.Subscriber('/fiducial_transforms', FiducialTransformArray, self.newTf)
 
         # rospy.Subscriber("/follower/amcl_pose", PoseWithCovarianceStamped, self.get_rotation)
-        self.rate = rospy.Rate(10)
+        self.rate = rospy.Rate(4)
         # self.posePub = rospy.Publisher("/fiducial_pose", PoseWithCovarianceStamped, queue_size=1)
         self.child_frame = "marker_frame"  # Name suggested by professor, could be any name
         self.parent_frame = "follower_tf/camera_rgb_optical_frame"
@@ -114,38 +117,11 @@ class FiducialBroadcast:
         self.goal.target_pose.pose.orientation.y = 0
         self.goal.target_pose.pose.orientation.z = 0
         self.goal.target_pose.pose.orientation.w = 1
-        # self.follower_pos = None
-        # self.follower_ori = None
-        # self.follower_pose = PoseStamped()
-        # self.follower_pose.header.frame_id = 'map'
-        # self.follower_pose.header.stamp = rospy.Time.now()
-        # self.follower_pose.pose.position.x = 2.2400196
-        # self.follower_pose.pose.position.y = 0.8411427
-        # self.follower_pose.pose.position.z = 0.0
-        # self.follower_pose.pose.orientation.x = 0.0
-        # self.follower_pose.pose.orientation.y = 0.0
-        # self.follower_pose.pose.orientation.z = 0.0
-        # self.follower_pose.pose.orientation.w = 1.0
 
-#     def get_rotation(self, msg):
-#         """
-#         :param msg: message received from amcl_pose
-#         :return null
-#         Update the global variable pos, ori with current amcl_pose
-#         """
-#         print("In get_rotation")
-#         (self.follower_pos, self.follower_ori) = (msg.pose.pose.position, msg.pose.pose.orientation)
-#         self.follower_pose = msg.pose.pose
-#         rospy.loginfo("Updating amcl pos={p}, ori={o}".format(p=self.follower_pos, o=self.follower_ori))
-#         """
-#         Updating amcl pos=x: 2.24612911149
-# y: 0.850341687014
-# z: 0.0, ori=x: 0.0
-# y: 0.0
-# z: -0.00394561706391
-# w: 0.999992216023
-#
-#         """
+        # Set up a publisher to the /cmd_vel topic
+        self.pub = rospy.Publisher("/follower/cmd_vel", Twist, queue_size=5)
+        # Declare a message of type Twist
+        self.velocity_msg = Twist()
 
     def publishTransform(self):
 
@@ -155,7 +131,7 @@ class FiducialBroadcast:
         if self.translation and self.rotation:
             # The publishLock is optional here. I choose to comment it for now
             # self.publishLock.acquire()
-            # print(self.translation, self.rotation)
+            print("publish:", self.translation, self.rotation)
             self.br.sendTransform(self.translation,
                                   self.rotation,
                                   rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
@@ -163,10 +139,10 @@ class FiducialBroadcast:
                                   self.child_frame,
                                   self.parent_frame)
             self.rate.sleep()
-            # self.publishLock.release()
+            #self.publishLock.release()
 
     def within_range(self, pos1, pos2):
-        return pos1 and pos2 and math.sqrt((pos2[0]-pos1[0])**2 + (pos2[1]-pos1[1])**2) < 0.5
+        return pos1 and pos2 and math.sqrt((pos2[0]-pos1[0])**2 + (pos2[1]-pos1[1])**2) < 1
 
     def newTf_test(self, msg):
         for t in msg.transforms:  # len(msg.transforms) always equals 1 in our case
@@ -175,18 +151,16 @@ class FiducialBroadcast:
             # tr.z = 0  # hardcode the marker's z to be 0, otherwise the follower could never reach it
             self.translation = (tr.x, tr.y, tr.z)
             self.rotation = (rot.x, rot.y, rot.z, rot.w)
-
+            # print(msg.image_seq)
             # When the marker is out of range(0.5m) of the follower
-            self.publishTransform()
-            self.rate.sleep()
-            self.get_marker_data_test()
+            self.br.sendTransform(self.translation,
+                                  self.rotation,
+                                  rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
+                                  # Tutorial2 shows rospy.Time.now() vs tutorial3 shows the latter
+                                  self.child_frame,
+                                  self.parent_frame)
 
-    def get_marker_data_test(self):
-        t = self.tf_listener.getLatestCommonTime("/map","/marker_frame")
-        position, quaterion = self.tf_listener.lookupTransform( "/map", "/marker_frame",t)
-        print(position, quaterion)
-        pos, ori = self.tf_listener.lookupTransform("/map","/follower_tf/base_link", t)
-        print(pos)
+            # self.get_marker_data_test()
 
     def newTf(self, msg):
         """
@@ -201,37 +175,44 @@ class FiducialBroadcast:
                 https://github.com/jrlandau/fiducials-1/blob/master/fiducial_slam/src/fiducial_slam.py#L173
         """
 
-        print("In newTf")
-        if msg.transforms:  # When the marker is found
+        print("In newTf", msg.image_seq)
+        if len(msg.transforms)>0:  # When the marker is found
             if self.exploration_mode:  # When in exploration mode
                 rospy.loginfo("Marker found")
-            for t in msg.transforms:  # len(msg.transforms) always equals 1 in our case
+            t = msg.transforms[0]
+            #for t in msg.transforms:  # len(msg.transforms) always equals 1 in our case
                                         # type(t is geometry_msgs/Transform
-                tr = t.transform.translation
-                rot = t.transform.rotation
-                # tr.z = 0  # hardcode the marker's z to be 0, otherwise the follower could never reach it
-                self.translation = (tr.x, tr.y, tr.z)
-                self.rotation = (rot.x, rot.y, rot.z, rot.w)
-                self.publishTransform()
-                self.rate.sleep()
-                pos_marker, ori_marker, pos_follower = self.get_marker_data()
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            # tr.z = 0  # hardcode the marker's z to be 0, otherwise the follower could never reach it
+            self.translation = (tr.x, tr.y, tr.z)
+            self.rotation = (rot.x, rot.y, rot.z, rot.w)
+            # print("sending, ", t, self.translation, self.rotation)
+            self.br.sendTransform(self.translation,
+                                  self.rotation,
+                                  rospy.Time.now(),  # !!! Not sure whether it should be msg.header.stamp
+                                  # Tutorial2 shows rospy.Time.now() vs tutorial3 shows the latter
+                                  self.child_frame,
+                                  self.parent_frame)
+            # self.rate.sleep()
+            pos_marker, ori_marker, pos_follower, rot = self.get_marker_data()
 
-                # print(self.follower_pos, self.goal.target_pose.pose.position)
-                if not self.within_range(pos_marker, pos_follower):
-                    # When the marker is out of range(0.5m) of the follower
-                    self.update_goal_with_marker(pos_marker, ori_marker)
-                    self.move_to_goal()
-                    if self.exploration_mode:
-                        rospy.loginfo("Following")
-                else:
-                    # When the marker is within 0.5m of the follower, do nothing
-                    print(pos_marker, self.goal.target_pose.pose.position, "Do nothing")
-                    pass
+            # print(self.follower_pos, self.goal.target_pose.pose.position)
+            if not self.within_range(pos_marker, pos_follower):
+                # When the marker is out of range(0.5m) of the follower
+                # self.update_goal_with_marker(pos_marker, ori_marker)
+                #self.move_to_goal()
+                self.go_to_goal(0, pos_marker, pos_follower, rot)
+                if self.exploration_mode:
+                    rospy.loginfo("Following")
+            else:
+                # When the marker is within 0.5m of the follower, do nothing
+                print(pos_marker, self.goal.target_pose.pose.position, "Do nothing")
+                pass
             self.exploration_mode = False
         else:
             rospy.loginfo("Looking for marker")
             self.exploration_mode = True
-
             self.currentGoalId = rospy.get_param("currentGoalId")
             self.update_goal_with_yaml_data()
             self.move_to_goal()
@@ -246,21 +227,31 @@ class FiducialBroadcast:
         The posision (x, y, z) of the follower
         """
 
-        t = self.tf_listener.getLatestCommonTime("/map","/marker_frame")
+        # t = self.tf_listener.getLatestCommonTime("/map","/marker_frame")
+        t = rospy.Time(0)
         pos_marker, ori_marker = self.tf_listener.lookupTransform( "/map", "/marker_frame",t)
-        pos_follower, _ = self.tf_listener.lookupTransform("/map","/follower_tf/base_link", t)
-        return pos_marker, ori_marker, pos_follower
+        print("In get_marker_data pos_marker", pos_marker)
+
+        pos_follower, rot = self.tf_listener.lookupTransform("/map","/follower_tf/base_link", rospy.Time(0))
+        return pos_marker, ori_marker, pos_follower, euler_from_quaternion(rot)[2]
 
 
-    def update_goal_with_marker(self, pos, ori):
+    def update_goal_with_marker(self, pos_marker, pos_follower):
         """
         :param pos: position of marker_frame, looks like [2.982819443974907, 0.8586162820460231, 0.3045994670744631]
         :param ori: orientation of marker_frame, looks like [-0.5109184755511623, 0.4943752129364844, 0.4886555454181498, -0.5057382901329233])
         :return:
         """
         self.goal.target_pose.header.stamp = rospy.Time.now()
-        self.goal.target_pose.pose.position.x = pos[0] - 0.3
-        self.goal.target_pose.pose.position.y = pos[1] - 0.3
+
+        x1, y1, x2, y2 = pos_follower[0], pos_follower[1], pos_marker[0], pos_marker[1]
+        dist = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+        delta_x = (x2-x1)/dist * (dist-0.5)
+        delta_y = (y2-y1)/dist * (dist-0.5)
+        rospy.loginfo("dist is {d}, delta_x={dx}, delta_y = {dy}".format(d = dist, dx = delta_x, dy = delta_y))
+        self.goal.target_pose.pose.position.x = x1 + delta_x
+        self.goal.target_pose.pose.position.y = y1 + delta_y
         self.goal.target_pose.pose.position.z = 0 # hardcode z to be 0 otherwise the follower could never reach
 
         # self.goal.target_pose.pose.orientation.x = 0
@@ -284,6 +275,92 @@ class FiducialBroadcast:
         self.goal.target_pose.pose.orientation.z = ori['z']
         self.goal.target_pose.pose.orientation.w = ori['w']
 
+    def rotate(self, relative_angle_degree, angular_velocity):
+        """Make the robot rotate in place
+
+        The angular velocity is modified before publishing the message on the topic /cmd_vel.
+        """
+
+        self.velocity_msg.angular.z = angular_velocity
+        reached = False
+        t0 = rospy.Time.now().to_sec()
+        while True:
+            # rospy.loginfo("TurtleBot is rotating")
+            self.pub.publish(self.velocity_msg)
+            # rate.sleep()
+            t1 = rospy.Time.now().to_sec()
+            # rospy.loginfo("t0: {t}".format(t=t0))
+            # rospy.loginfo("t1: {t}".format(t=t1))
+            current_angle_degree = (t1 - t0) * angular_velocity
+            # rospy.loginfo("current angle: {a}".format(a=current_angle_degree))
+            # rospy.loginfo("angle to reach: {a}".format(a=relative_angle_degree))
+            if abs(current_angle_degree) >= math.radians(abs(relative_angle_degree)):
+                rospy.loginfo("reached")
+                reached = True
+                break
+        # finally, stop the robot when the distance is moved
+        self.velocity_msg.angular.z = 0
+        self.pub.publish(self.velocity_msg)
+        return current_angle_degree, reached
+
+    def go_to_goal(self, last_rotation, pos_marker, pos_follower, rot_follower):
+        """Task the robot to reach a goal (x,y) using a proportional controller.
+
+        The current pose of the robot is retrieved from /odom topic.
+        Publish the message to /cmd_vel topic.
+        """
+
+        # get the goal to reach from arguments passed to the command line
+        print("In go_to_goal", pos_marker)
+        g_x, g_y, rot = pos_marker[0], pos_marker[1], rot_follower
+        # compute the distance from the current position to the goal
+        if self.within_range(pos_marker, pos_follower):
+            rospy.logwarn("Goal reached---------------------")
+            self.velocity_msg.angular.z = 0
+            self.velocity_msg.linear.x = 0
+            self.pub.publish(self.velocity_msg)
+            return
+        print("-" * 50)
+        curr_x = pos_follower[0]
+        curr_y = pos_follower[1]
+        rospy.loginfo("x = {0}, y = {1}".format(curr_x, curr_y))
+        angle_to_goal = math.atan2(g_y - curr_y, g_x - curr_x)
+
+        print("dist:, g_x: , g_y, cur_x, cury", math.sqrt((g_x-curr_x)**2+(g_y-curr_y)**2), g_x, g_y, curr_x, curr_y)
+        # the domain of arctan(x) is (-inf, inf)
+        # we would like to restrict the domain to (0, 2pi)
+        if angle_to_goal < -math.pi / 4 or angle_to_goal > math.pi / 4:
+            if 0 > g_y > curr_y:
+                angle_to_goal = -2 * math.pi + angle_to_goal
+            elif 0 <= g_y < curr_y:
+                angle_to_goal = 2 * math.pi + angle_to_goal
+        if last_rotation > math.pi - 0.1 and rot <= 0:
+            rot = (2 * math.pi) + rot
+        elif last_rotation < -math.pi + 0.1 and rot > 0:
+            rot = (-2 * math.pi) + rot
+
+        # proportional control for rotating the robot
+        self.velocity_msg.angular.z = k_v_gain * (angle_to_goal - rot)
+        # print("Velocity angular", velocity_msg.angular.z)
+        distance_to_goal = math.sqrt((g_x-curr_x)**2+(g_y-curr_y)**2)
+        # proportional control to move the robot forward
+        # We will drive the robot at a maximum speed of 0.5
+        self.velocity_msg.linear.x = min(k_h_gain * distance_to_goal, 0.05)
+
+        # set the z angular velocity for positive and negative rotations
+        if -0.1<self.velocity_msg.angular.z < 0.1:
+            self.velocity_msg.angular.z = 0.0
+        else:
+            if self.velocity_msg.angular.z > 0:
+                self.velocity_msg.angular.z = min(self.velocity_msg.angular.z, 2)
+            else:
+                self.velocity_msg.angular.z = max(self.velocity_msg.angular.z, -2)
+
+        # update the new rotation for the next loop
+        last_rot = rot
+        self.pub.publish(self.velocity_msg)
+        return self.velocity_msg, distance_to_goal, last_rot
+
     def move_to_goal(self):
         """
         move to self.goals[self.currentGoalId],
@@ -302,7 +379,7 @@ class FiducialBroadcast:
         client.send_goal(self.goal)
 
         # client.wait_for_result(rospy.Duration(60))
-        client.wait_for_result()
+        client.wait_for_result(rospy.Duration(5))
         if client.get_state() == GoalStatus.SUCCEEDED:
             rospy.loginfo("You have reached the destination")
             return True
@@ -315,42 +392,19 @@ class FiducialBroadcast:
 
         marker_frame = False
         while not rospy.is_shutdown():
-            if not marker_frame:
-                self.publishTransform()
-                rospy.sleep(10)
-                marker_frame = True
-            #self.publishTransform()
-            #self.rate.sleep()
+            pass
+            # if not marker_frame:
+            #     self.publishTransform()
+            #     rospy.sleep(10)
+            #     marker_frame = True
+            # self.publishTransform()
+            # self.rate.sleep()
             # self.check_transform()
             # print("Marker data:", self.get_marker_data())
         self.close()
         rospy.loginfo("Fiducial Broadcaster ended")
 
 
-
-        # # parent frame for the listener
-        # parent_frame = "/map"  # it should be /map But in my frames.pdf it currently doesn't have map
-        # # child frame for the listener
-        # child_frame = '/marker_frame'
-        #
-        # try:
-        #     # listener to get child_frame vs parent_frame
-        #     relative_pose_tf = TransformStamped()
-        #     t = self.tf_listener.getLatestCommonTime(child_frame, parent_frame)
-        #     (trans, rot) = self.tf_listener.lookupTransform(child_frame, parent_frame, t)
-        #     print("In get marker data, trans, rot", trans, rot)
-        #     # rotation is a list [r, p, y]
-        #     point = Point(*trans)
-        #     rotation = euler_from_quaternion(rot)
-        #     print("point:",point, "rotation:", rotation)
-        #
-        #
-        # except (tf.Exception, tf.ConnectivityException, tf.LookupException):
-        #     rospy.loginfo("TF Exception")
-        #     return
-        #
-        # # return the position (x, y, z) and the yaw
-        # return point, rotation
 
 if __name__ == '__main__':
     node = FiducialBroadcast()
