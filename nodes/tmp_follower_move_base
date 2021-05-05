@@ -108,7 +108,7 @@ class FiducialBroadcast:
         self.goalReached = False
         # initialize the 1st goal to reach be 0
         # currentGoalId: 0-livingroom 1-recreationroom 2-kitchen 3-bedroom
-        self.currentGoalId = 0
+        self.currentGoalId = -1 # Initialize with an invalid value
 
         self.goal = MoveBaseGoal()
         # set up the frame parameters
@@ -179,6 +179,10 @@ class FiducialBroadcast:
         if len(msg.transforms)>0:  # When the marker is found
             if self.exploration_mode:  # When in exploration mode
                 rospy.loginfo("Marker found")
+                if abs(self.velocity_msg.angular.z) > 0.1:
+                    self.velocity_msg.angular.z = 0
+                    self.velocity_msg.linear.x = 0
+                    self.pub(self.velocity_msg)
             t = msg.transforms[0]
             #for t in msg.transforms:  # len(msg.transforms) always equals 1 in our case
                                         # type(t is geometry_msgs/Transform
@@ -213,9 +217,16 @@ class FiducialBroadcast:
         else:
             rospy.loginfo("Looking for marker")
             self.exploration_mode = True
-            self.currentGoalId = rospy.get_param("currentGoalId")
-            self.update_goal_with_yaml_data()
-            self.move_to_goal()
+
+            self.velocity_msg.angular.z = -5
+            self.velocity_msg.linear.x = 0
+            self.pub(self.velocity_msg)
+            if rospy.get_param("currentGoalId") == self.currentGoalId:
+                rospy.loginfo("The leader seems waiting for me")
+            else:
+                self.currentGoalId = rospy.get_param("currentGoalId")
+                self.update_goal_with_yaml_data()
+                self.move_to_goal()
 
     # For step 3 listener.lookupTransform
     def get_marker_data(self):
@@ -345,7 +356,7 @@ class FiducialBroadcast:
         distance_to_goal = math.sqrt((g_x-curr_x)**2+(g_y-curr_y)**2)
         # proportional control to move the robot forward
         # We will drive the robot at a maximum speed of 0.5
-        self.velocity_msg.linear.x = min(k_h_gain * distance_to_goal, 0.05)
+        self.velocity_msg.linear.x = min(k_h_gain * distance_to_goal, 0.18)
 
         # set the z angular velocity for positive and negative rotations
         if -0.1<self.velocity_msg.angular.z < 0.1:
